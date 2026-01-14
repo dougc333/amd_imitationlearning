@@ -1,1 +1,4 @@
-# amd_imitationlearning
+AMD proposal
+
+Imitation learning for gpubrowser
+

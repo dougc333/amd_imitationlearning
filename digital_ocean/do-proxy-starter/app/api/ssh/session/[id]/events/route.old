@@ -1,0 +1,52 @@
+// export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+import { sshSessions } from "@/lib/sshSessions";
+import type { NextRequest } from "next/server";
+
+export async function GET(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> } // 👈 note: Promise
+) {
+  const { id } = await ctx.params;         // 👈 await it
+  const s = sshSessions.get(id);
+  if (!s) return new Response("Not found", { status: 404 });
+
+  const encoder = new TextEncoder();
+  let sub: { write: (chunk: string) => void; close: () => void } | null = null;
+  let hb: NodeJS.Timeout | null = null;
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const write = (chunk: string) => {
+        const payload = JSON.stringify(chunk);
+        controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+      }
+      const close = () => controller.close();
+
+      sub = { write, close };
+      if (!sshSessions.addSub(id, sub)) {
+        controller.close();
+        return;
+      }
+
+      write("[connected]\r\n");
+      hb = setInterval(() => {
+        controller.enqueue(encoder.encode(`: ping\n\n`)); // SSE comment heartbeat
+      }, 15_000);
+    },
+    cancel() {
+      if (hb) clearInterval(hb);
+      if (sub) sshSessions.removeSub(id, sub);
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+}
